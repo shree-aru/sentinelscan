@@ -233,6 +233,11 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Only show findings (no passed checks)"
     )
+    parser.add_argument(
+        "--no-intel",
+        action="store_true",
+        help="Skip threat intelligence lookup (Shodan + NVD) for faster offline scans"
+    )
 
     return parser.parse_args()
 
@@ -274,11 +279,15 @@ def main():
     console.print(f"\n[bold white]  Initializing scan...[/bold white]")
     console.print(f"  Target  : [bold cyan]{target}[/bold cyan]")
     console.print(f"  Timeout : {args.timeout}s per request")
-    console.print(f"  Modules : Security Headers, SSL/TLS, Sensitive Files\n")
+    intel_status = "disabled (--no-intel)" if args.no_intel else "Shodan + NVD"
+    console.print(f"  Modules : Headers, SSL, Dirs, SQLi, XSS, CORS | Intel: {intel_status}\n")
 
     # ── RUN THE SCAN ────────────────────────────────────────────────────────
     start_time = time.time()
-    scanner = SentinelCore(timeout=args.timeout)
+    scanner = SentinelCore(
+        timeout=args.timeout,
+        include_threat_intel=not args.no_intel
+    )
 
     with Progress(
         SpinnerColumn(),

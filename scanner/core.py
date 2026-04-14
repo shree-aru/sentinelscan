@@ -1,22 +1,14 @@
 """
-SentinelScan - Core Scan Orchestrator
-=======================================
-The brain of SentinelScan. This module:
-  1. Validates the target URL
-  2. Runs all scanner modules
-  3. Aggregates results into a single ScanReport
-  4. Saves results to JSON
+SentinelScan - Core Scan Orchestrator (v2)
+============================================
+Updated to include all Day 2 modules:
+  - SQL Injection scanner
+  - Reflected XSS scanner
+  - CORS Misconfiguration checker
+  - Threat Intelligence (Shodan + NVD)
 
-Think of this like an "assembly line manager":
-  - Header checker works on one thing
-  - SSL checker works on another
-  - Director scanner works on another
-  - The orchestrator (this file) coordinates them all
-
-Learning goals:
-  - Composition pattern (combine modules, don't inherit)
-  - datetime for timestamps
-  - json module for saving reports
+Also supports selective module execution for the FastAPI
+quick-scan endpoint (/scan/quick runs only fast modules).
 """
 
 import json
@@ -27,24 +19,17 @@ from scanner.models import ScanReport
 from scanner.header_checker import HeaderChecker
 from scanner.ssl_checker import SSLChecker
 from scanner.dir_scanner import DirectoryScanner
+from scanner.sqli_scanner import SQLiScanner
+from scanner.xss_scanner import XSSScanner
+from scanner.cors_checker import CORSChecker
+from scanner.threat_intel import ThreatIntelModule
 
 
 def normalize_target(target: str) -> str:
-    """
-    Ensure the target URL is valid and normalized.
-    
-    Examples:
-        "example.com"          → "https://example.com"
-        "http://example.com"   → "http://example.com"  (kept as-is, flagged by SSL checker)
-        "  https://EXAMPLE.com " → "https://example.com"
-    """
+    """Normalize a URL — add https:// if missing, lowercase scheme and host."""
     target = target.strip()
-    
-    # If no scheme, default to HTTPS
     if not target.startswith(("http://", "https://")):
         target = "https://" + target
-    
-    # Lowercase the scheme and host (URLs are case-insensitive for host)
     parsed = urlparse(target)
     normalized = parsed._replace(
         scheme=parsed.scheme.lower(),
@@ -54,108 +39,113 @@ def normalize_target(target: str) -> str:
 
 
 def validate_target(target: str) -> tuple[bool, str]:
-    """
-    Basic validation before scanning.
-    
-    Returns:
-        (True, "") if valid
-        (False, error_message) if invalid
-    """
+    """Validate that the target is a usable URL."""
     try:
         parsed = urlparse(target)
         if not parsed.scheme or not parsed.netloc:
             return False, "Invalid URL — missing scheme or hostname"
         if parsed.scheme not in ("http", "https"):
-            return False, f"Unsupported scheme '{parsed.scheme}' — use http:// or https://"
+            return False, f"Unsupported scheme '{parsed.scheme}'"
         if "." not in parsed.netloc and parsed.netloc not in ("localhost", "127.0.0.1"):
-            return False, f"'{parsed.netloc}' doesn't look like a valid hostname"
+            return False, f"'{parsed.netloc}' does not look like a valid hostname"
         return True, ""
     except Exception as e:
         return False, str(e)
 
 
+# Module registry — maps short names (used by FastAPI) to module classes
+MODULE_REGISTRY = {
+    "headers": HeaderChecker,
+    "ssl":     SSLChecker,
+    "dirs":    DirectoryScanner,
+    "sqli":    SQLiScanner,
+    "xss":     XSSScanner,
+    "cors":    CORSChecker,
+}
+
+
 class SentinelCore:
     """
-    The main scanner orchestrator.
-    
-    Usage:
-        scanner = SentinelCore()
-        report = scanner.scan("https://example.com")
-        print(report.total_findings())
+    Orchestrates all scanner modules and produces a unified ScanReport.
+
+    Supports selective module execution:
+      SentinelCore(modules=["headers", "ssl"])  — run only these two
+      SentinelCore()                             — run all modules
+
+    Args:
+        timeout:              Request timeout per module (seconds)
+        modules:              List of module names to run (None = all)
+        include_threat_intel: Whether to run the Shodan/NVD lookup
     """
 
-    def __init__(self, timeout: int = 10):
+    def __init__(
+        self,
+        timeout: int = 10,
+        modules: list[str] | None = None,
+        include_threat_intel: bool = True
+    ):
         self.timeout = timeout
-        # Initialize all scanner modules
-        # New modules can be added here without changing any other code
-        self.modules = [
-            HeaderChecker(timeout=timeout),
-            SSLChecker(timeout=timeout),
-            DirectoryScanner(timeout=timeout),
-        ]
+        self.include_threat_intel = include_threat_intel
+
+        # Build the active module list from registry
+        if modules:
+            # Only run modules that are both requested AND exist in our registry
+            active_keys = [m for m in modules if m in MODULE_REGISTRY]
+        else:
+            # Default: run everything
+            active_keys = list(MODULE_REGISTRY.keys())
+
+        # Instantiate each module class with the configured timeout
+        self.modules = [MODULE_REGISTRY[key](timeout=timeout) for key in active_keys]
 
     def scan(self, target: str) -> ScanReport:
         """
-        Run the complete security scan against a target.
-        
+        Execute all active modules against the target and return a ScanReport.
+
         Args:
-            target: URL to scan (with or without https://)
-            
+            target: Normalized URL to scan
+
         Returns:
-            ScanReport object with all findings from all modules
+            ScanReport with aggregated results from all modules
         """
-        # Normalize and validate the target
         target = normalize_target(target)
         is_valid, error_msg = validate_target(target)
-        
-        if not is_valid:
-            # Return an empty report with the validation error
-            report = ScanReport(
-                target=target,
-                scan_time=datetime.utcnow().isoformat() + "Z",
-                modules_run=[]
-            )
-            return report
 
-        # Create the report container
         report = ScanReport(
             target=target,
             scan_time=datetime.utcnow().isoformat() + "Z",
             modules_run=[]
         )
 
-        # Run each module and collect results
+        if not is_valid:
+            return report
+
+        # Run core scanner modules
         for module in self.modules:
             module_result = module.check(target)
             report.results.append(module_result)
             report.modules_run.append(module_result.module_name)
 
+        # Threat intelligence runs last — it needs the target resolved
+        if self.include_threat_intel:
+            intel = ThreatIntelModule(max_cve_lookups=5)
+            intel_result = intel.check(target)
+            report.results.append(intel_result)
+            report.modules_run.append(intel_result.module_name)
+
         return report
 
     def save_json_report(self, report: ScanReport, output_path: str) -> str:
-        """
-        Serialize the report to a JSON file.
-        
-        The JSON format makes SentinelScan's output machine-readable,
-        so it can integrate with other security tools, dashboards, or CI/CD pipelines.
-        
-        Args:
-            report:      The completed ScanReport
-            output_path: Where to save the JSON file
-            
-        Returns:
-            The path where the file was saved
-        """
+        """Serialize the ScanReport to a JSON file."""
         def serialize(obj):
-            """Helper to convert non-JSON-serializable objects like Enums."""
-            if hasattr(obj, "value"):   # Enum → use its string value
+            if hasattr(obj, "value"):
                 return obj.value
-            if hasattr(obj, "__dict__"):  # Dataclass → use its dict
+            if hasattr(obj, "__dict__"):
                 return obj.__dict__
             return str(obj)
 
         report_dict = {
-            "sentinelscan_version": "1.0",
+            "sentinelscan_version": "2.0",
             "target": report.target,
             "scan_time": report.scan_time,
             "summary": {
@@ -167,28 +157,26 @@ class SentinelCore:
                 "low": report.low_count(),
                 "modules_run": report.modules_run,
             },
-            "modules": []
+            "modules": [
+                {
+                    "module": r.module_name,
+                    "error": r.error,
+                    "findings": [
+                        {
+                            "title": f.title,
+                            "severity": f.severity.value,
+                            "cvss_score": f.cvss_score,
+                            "description": f.description,
+                            "recommendation": f.recommendation,
+                            "evidence": f.evidence,
+                        }
+                        for f in r.findings
+                    ],
+                    "passed_checks": r.passed
+                }
+                for r in report.results
+            ]
         }
-
-        for result in report.results:
-            module_data = {
-                "module": result.module_name,
-                "target": result.target,
-                "error": result.error,
-                "findings": [
-                    {
-                        "title": f.title,
-                        "severity": f.severity.value,
-                        "cvss_score": f.cvss_score,
-                        "description": f.description,
-                        "recommendation": f.recommendation,
-                        "evidence": f.evidence,
-                    }
-                    for f in result.findings
-                ],
-                "passed_checks": result.passed
-            }
-            report_dict["modules"].append(module_data)
 
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(report_dict, f, indent=2, default=serialize)
