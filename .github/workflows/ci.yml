@@ -1,0 +1,128 @@
+name: SentinelScan CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Job 1: Unit Tests ────────────────────────────────────────────────────────
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest pytest-cov
+
+      - name: Run unit tests with coverage
+        run: |
+          python -m pytest tests/ -v --tb=short \
+            --cov=scanner --cov=api \
+            --cov-report=term-missing \
+            --cov-report=xml
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  # ── Job 2: Security Scan (runs after tests pass) ─────────────────────────────
+  security-scan:
+    name: Security Scan (httpbin.org)
+    runs-on: ubuntu-latest
+    needs: test  # Only run if tests pass
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run quick security scan against httpbin.org
+        run: |
+          python main.py https://httpbin.org \
+            --yes \
+            --no-intel \
+            --no-banner \
+            --quiet \
+            --timeout 10 \
+            --output scan_report.json
+        # Exit code 1 means findings exist — that is expected. Don't fail the job.
+        continue-on-error: true
+
+      - name: Display scan summary
+        run: |
+          python -c "
+          import json
+          with open('scan_report.json') as f:
+              r = json.load(f)
+          s = r['summary']
+          print(f'Target: {r[\"target\"]}')
+          print(f'Risk: {s[\"overall_risk\"]}')
+          print(f'Total findings: {s[\"total_findings\"]}')
+          print(f'Critical: {s[\"critical\"]} | High: {s[\"high\"]} | Medium: {s[\"medium\"]} | Low: {s[\"low\"]}')
+          "
+
+      - name: Upload scan report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-scan-report
+          path: scan_report.json
+
+  # ── Job 3: Import Validation ──────────────────────────────────────────────────
+  validate-imports:
+    name: Validate All Modules Import Cleanly
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate all module imports
+        run: |
+          python -c "
+          from scanner.core import SentinelCore, normalize_target, validate_target
+          from scanner.models import ScanReport, ModuleResult, Finding, Severity
+          from scanner.header_checker import HeaderChecker
+          from scanner.ssl_checker import SSLChecker
+          from scanner.dir_scanner import DirectoryScanner
+          from scanner.sqli_scanner import SQLiScanner
+          from scanner.xss_scanner import XSSScanner
+          from scanner.cors_checker import CORSChecker
+          from scanner.tech_fingerprint import TechFingerprinter
+          from scanner.threat_intel import ThreatIntelModule
+          from scanner.subdomain_enum import SubdomainEnumerator
+          from reporter.pdf_reporter import generate_pdf_report
+          from api.main import app
+          from api.auth import require_api_key
+          print('All 9 scanner modules + API + reporter imported successfully')
+          "

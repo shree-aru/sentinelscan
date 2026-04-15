@@ -244,6 +244,11 @@ def parse_arguments() -> argparse.Namespace:
         metavar="FILE",
         help="Also generate a PDF report (e.g., --pdf report.pdf)"
     )
+    parser.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Skip authorization confirmation prompt (for CI/CD pipelines)"
+    )
 
     return parser.parse_args()
 
@@ -276,17 +281,21 @@ def main():
     if not args.no_banner:
         print_banner()
 
-    # Authorization check — this is what makes us an ethical scanner
+    # Authorization check — skippable for CI/CD via --yes
     target = normalize_target(args.target)
-    if not confirm_authorization(target):
-        console.print("\n[bold red]Scan aborted.[/bold red] Only scan systems you are authorized to test.\n")
-        sys.exit(0)
+    if not getattr(args, 'yes', False):
+        if not confirm_authorization(target):
+            console.print("\n[bold red]Scan aborted.[/bold red] Only scan systems you are authorized to test.\n")
+            sys.exit(0)
+    else:
+        console.print(f"[dim]  Authorization prompt skipped (--yes flag)[/dim]")
 
     console.print(f"\n[bold white]  Initializing scan...[/bold white]")
     console.print(f"  Target  : [bold cyan]{target}[/bold cyan]")
     console.print(f"  Timeout : {args.timeout}s per request")
     intel_status = "disabled (--no-intel)" if args.no_intel else "Shodan + NVD"
-    console.print(f"  Modules : Headers, SSL, Dirs, SQLi, XSS, CORS | Intel: {intel_status}\n")
+    console.print(f"  Modules : Headers, SSL, Dirs, SQLi, XSS, CORS, Tech, Subdomains")
+    console.print(f"  Intel   : {intel_status}\n")
 
     # ── RUN THE SCAN ────────────────────────────────────────────────────────
     start_time = time.time()

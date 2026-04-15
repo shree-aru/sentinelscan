@@ -24,6 +24,7 @@ from scanner.xss_scanner import XSSScanner
 from scanner.cors_checker import CORSChecker
 from scanner.threat_intel import ThreatIntelModule
 from scanner.tech_fingerprint import TechFingerprinter
+from scanner.subdomain_enum import SubdomainEnumerator
 
 
 def normalize_target(target: str) -> str:
@@ -56,13 +57,14 @@ def validate_target(target: str) -> tuple[bool, str]:
 
 # Module registry — maps short names (used by FastAPI) to module classes
 MODULE_REGISTRY = {
-    "headers": HeaderChecker,
-    "ssl":     SSLChecker,
-    "dirs":    DirectoryScanner,
-    "sqli":    SQLiScanner,
-    "xss":     XSSScanner,
-    "cors":    CORSChecker,
-    "tech":    TechFingerprinter,
+    "headers":    HeaderChecker,
+    "ssl":        SSLChecker,
+    "dirs":       DirectoryScanner,
+    "sqli":       SQLiScanner,
+    "xss":        XSSScanner,
+    "cors":       CORSChecker,
+    "tech":       TechFingerprinter,
+    "subdomains": SubdomainEnumerator,
 }
 
 
