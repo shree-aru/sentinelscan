@@ -33,8 +33,9 @@ from rich.text import Text
 from rich import box
 from rich.style import Style
 
-from scanner.core import SentinelCore, normalize_target
+from scanner.core import SentinelCore, normalize_target, validate_target
 from scanner.models import Severity, ScanReport, ModuleResult
+from reporter.pdf_reporter import generate_pdf_report
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  RICH CONSOLE SETUP
@@ -238,6 +239,11 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Skip threat intelligence lookup (Shodan + NVD) for faster offline scans"
     )
+    parser.add_argument(
+        "--pdf",
+        metavar="FILE",
+        help="Also generate a PDF report (e.g., --pdf report.pdf)"
+    )
 
     return parser.parse_args()
 
@@ -326,6 +332,15 @@ def main():
     saved_path = scanner.save_json_report(report, str(output_path))
 
     console.print(f"\n  [bold green][DONE][/bold green] JSON report saved: [cyan]{saved_path}[/cyan]")
+
+    # PDF report (optional)
+    if args.pdf:
+        try:
+            pdf_path = generate_pdf_report(report, args.pdf)
+            console.print(f"  [bold green][DONE][/bold green] PDF report saved: [cyan]{pdf_path}[/cyan]")
+        except Exception as e:
+            console.print(f"  [yellow][WARN] PDF generation failed: {e}[/yellow]")
+
     console.print(f"  [dim]Scan completed in {elapsed:.1f}s[/dim]\n")
 
     # Exit with non-zero code if critical/high findings exist

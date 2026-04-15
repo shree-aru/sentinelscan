@@ -23,6 +23,7 @@ from scanner.sqli_scanner import SQLiScanner
 from scanner.xss_scanner import XSSScanner
 from scanner.cors_checker import CORSChecker
 from scanner.threat_intel import ThreatIntelModule
+from scanner.tech_fingerprint import TechFingerprinter
 
 
 def normalize_target(target: str) -> str:
@@ -61,6 +62,7 @@ MODULE_REGISTRY = {
     "sqli":    SQLiScanner,
     "xss":     XSSScanner,
     "cors":    CORSChecker,
+    "tech":    TechFingerprinter,
 }
 
 
